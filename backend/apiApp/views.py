@@ -17,6 +17,7 @@ from django.views.decorators.csrf import csrf_exempt
 
 from drf_yasg.utils import swagger_auto_schema
 from rest_framework import serializers
+from drf_yasg import openapi
 
 logger = logging.getLogger(__name__)
 
@@ -157,18 +158,32 @@ def add_to_wishlist(request):
     serializer = WishlistSerializer(new_wishlist)
     return Response(serializer.data)
 
+# Define the query parameter for Swagger
+query_param = openapi.Parameter(
+    'query',
+    openapi.IN_QUERY,
+    description="Search term (product name, description, or category)",
+    type=openapi.TYPE_STRING,
+    required=True
+)
+
+@swagger_auto_schema(
+    method='get',
+    manual_parameters=[query_param]
+)
 @api_view(['GET'])
 def product_search(request):
     query = request.query_params.get("query") 
     if not query:
         return Response("No query provided", status=400)
     
-    products = Product.objects.filter(Q(name__icontains=query) | 
-                                      Q(description__icontains=query) |
-                                       Q(category__name__icontains=query) )
+    products = Product.objects.filter(
+        Q(name__icontains=query) | 
+        Q(description__icontains=query) |
+        Q(category__name__icontains=query)
+    )
     serializer = ProductListSerializer(products, many=True)
     return Response(serializer.data)
-    
 
 
 
