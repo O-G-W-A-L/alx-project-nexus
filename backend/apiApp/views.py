@@ -1,3 +1,4 @@
+import logging
 import stripe 
 from django.conf import settings
 from django.shortcuts import render
@@ -13,6 +14,12 @@ from .serializers import CartItemSerializer, CartSerializer, CategoryDetailSeria
 from django.http import HttpResponse
 from django.views.decorators.csrf import csrf_exempt
 
+
+from drf_yasg.utils import swagger_auto_schema
+from rest_framework import serializers
+
+logger = logging.getLogger(__name__)
+
 # Create your views here.
 stripe.api_key = settings.STRIPE_SECRET_KEY
 endpoint_secret = settings.WEBHOOK_SECRET
@@ -20,7 +27,7 @@ endpoint_secret = settings.WEBHOOK_SECRET
 from django.http import JsonResponse
 
 def home(request):
-    return JsonResponse({"message": "Welcome to the E-commerce API!"})
+    return JsonResponse({"message": "Welcome to our E-commerce API!"})
 
 
 User = get_user_model()
@@ -275,18 +282,27 @@ def fulfill_checkout(session, cart_code):
 # Newly Added
 
 
-@api_view(["POST"])
-def create_user(request):
-    username = request.data.get("username")
-    email = request.data.get("email")
-    first_name = request.data.get("first_name")
-    last_name = request.data.get("last_name")
-    profile_picture_url = request.data.get("profile_picture_url")
 
-    new_user = User.objects.create(username=username, email=email,
-                                       first_name=first_name, last_name=last_name, profile_picture_url=profile_picture_url)
-    serializer = UserSerializer(new_user)
-    return Response(serializer.data)
+# Serializer for Swagger and validation
+class CreateUserSerializer(serializers.Serializer):
+    username = serializers.CharField()
+    email = serializers.EmailField()
+    password = serializers.CharField(write_only=True)
+
+@swagger_auto_schema(method='post', request_body=CreateUserSerializer)
+@api_view(['POST'])
+def create_user(request):
+    serializer = CreateUserSerializer(data=request.data)
+    if serializer.is_valid():
+        data = serializer.validated_data
+        user = User.objects.create_user(
+            username=data['username'],
+            email=data['email'],
+            password=data['password']
+        )
+        return Response(UserSerializer(user).data, status=status.HTTP_201_CREATED)
+    return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
 
 
 @api_view(["GET"])
