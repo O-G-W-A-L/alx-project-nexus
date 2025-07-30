@@ -135,38 +135,81 @@ def update_cartitem_quantity(request):
     return Response({"data": serializer.data, "message": "Cart item updated successfully!"})
 
 
-
+@swagger_auto_schema(
+    method='post',
+    request_body=openapi.Schema(
+        type=openapi.TYPE_OBJECT,
+        required=['product_id', 'email', 'rating', 'review'],
+        properties={
+            'product_id': openapi.Schema(type=openapi.TYPE_INTEGER),
+            'email': openapi.Schema(type=openapi.TYPE_STRING, format='email'),
+            'rating': openapi.Schema(type=openapi.TYPE_INTEGER),
+            'review': openapi.Schema(type=openapi.TYPE_STRING),
+        },
+    ),
+    responses={200: ReviewSerializer()}
+)
 @api_view(["POST"])
 def add_review(request):
-    
     product_id = request.data.get("product_id")
     email = request.data.get("email")
     rating = request.data.get("rating")
     review_text = request.data.get("review")
 
-    product = Product.objects.get(id=product_id)
-    user = User.objects.get(email=email)
+    # Try to get product
+    try:
+        product = Product.objects.get(id=product_id)
+    except Product.DoesNotExist:
+        return Response({"error": "Product not found."}, status=status.HTTP_404_NOT_FOUND)
 
+    # Try to get user
+    try:
+        user = User.objects.get(email=email)
+    except User.DoesNotExist:
+        return Response({"error": "User not found."}, status=status.HTTP_404_NOT_FOUND)
+
+    # Prevent duplicate review
     if Review.objects.filter(product=product, user=user).exists():
-        return Response({"error": "You already dropped a review for this product"}, status=400)
+        return Response({"error": "You already dropped a review for this product"}, status=status.HTTP_400_BAD_REQUEST)
 
-    review  = Review.objects.create(product=product, user=user, rating=rating, review=review_text)
+    # Create review
+    review = Review.objects.create(product=product, user=user, rating=rating, review=review_text)
     serializer = ReviewSerializer(review)
-    return Response(serializer.data)
+    return Response(serializer.data, status=status.HTTP_201_CREATED)
 
 
+update_review_request = openapi.Schema(
+    type=openapi.TYPE_OBJECT,
+    required=['rating'],
+    properties={
+        'rating': openapi.Schema(type=openapi.TYPE_INTEGER, description='Rating from 1 to 5'),
+        'review': openapi.Schema(type=openapi.TYPE_STRING, description='Review text'),
+    },
+)
+
+@swagger_auto_schema(method='put', request_body=update_review_request, responses={200: ReviewSerializer()})
 @api_view(['PUT'])
 def update_review(request, pk):
-    review = Review.objects.get(id=pk) 
+    try:
+        review = Review.objects.get(id=pk)
+    except Review.DoesNotExist:
+        return Response({"error": "Review not found."}, status=404)
+
     rating = request.data.get("rating")
     review_text = request.data.get("review")
 
-    review.rating = rating 
-    review.review = review_text
+    if rating is None:
+        return Response({"error": "Rating is required."}, status=400)
+
+    review.rating = rating
+    if review_text is not None:
+        review.review = review_text
+
     review.save()
 
     serializer = ReviewSerializer(review)
     return Response(serializer.data)
+
 
 
 @api_view(['DELETE'])
