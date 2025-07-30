@@ -9,7 +9,7 @@ from rest_framework.response import Response
 from rest_framework import status
 from .models import Cart, CartItem, Category, CustomerAddress, Order, OrderItem, Product, Review, Wishlist
 from .serializers import CartItemSerializer, CartSerializer, CategoryDetailSerializer, CategoryListSerializer, CustomerAddressSerializer, OrderSerializer, ProductListSerializer, ProductDetailSerializer, ReviewSerializer, SimpleCartSerializer, UserSerializer, WishlistSerializer
-
+from .serializers import AddToCartSerializer  
 
 from django.http import HttpResponse
 from django.views.decorators.csrf import csrf_exempt
@@ -60,35 +60,79 @@ def category_detail(request, slug):
     return Response(serializer.data)
 
 
+@swagger_auto_schema(
+    method='post',
+    request_body=openapi.Schema(
+        type=openapi.TYPE_OBJECT,
+        required=['cart_code', 'product_id'],
+        properties={
+            'cart_code': openapi.Schema(type=openapi.TYPE_STRING),
+            'product_id': openapi.Schema(type=openapi.TYPE_INTEGER),
+        },
+    ),
+    responses={200: CartSerializer()},
+)
 @api_view(["POST"])
 def add_to_cart(request):
     cart_code = request.data.get("cart_code")
     product_id = request.data.get("product_id")
 
-    cart, created = Cart.objects.get_or_create(cart_code=cart_code)
-    product = Product.objects.get(id=product_id)
+    # Handle missing parameters
+    if not cart_code or not product_id:
+        return Response({"detail": "cart_code and product_id are required."}, status=400)
 
+    try:
+        cart, created = Cart.objects.get_or_create(cart_code=cart_code)
+        product = Product.objects.get(id=product_id)
+    except Product.DoesNotExist:
+        return Response({"detail": "Product not found."}, status=404)
+
+    # Increment quantity if already exists
     cartitem, created = CartItem.objects.get_or_create(product=product, cart=cart)
-    cartitem.quantity = 1 
-    cartitem.save() 
+    if not created:
+        cartitem.quantity += 1
+    else:
+        cartitem.quantity = 1
+    cartitem.save()
 
     serializer = CartSerializer(cart)
     return Response(serializer.data)
 
 
+@swagger_auto_schema(
+    method='put',
+    request_body=openapi.Schema(
+        type=openapi.TYPE_OBJECT,
+        required=['item_id', 'quantity'],
+        properties={
+            'item_id': openapi.Schema(type=openapi.TYPE_INTEGER),
+            'quantity': openapi.Schema(type=openapi.TYPE_INTEGER),
+        },
+    ),
+    responses={200: openapi.Response("Cart item updated", CartItemSerializer())}
+)
 @api_view(['PUT'])
 def update_cartitem_quantity(request):
     cartitem_id = request.data.get("item_id")
     quantity = request.data.get("quantity")
 
-    quantity = int(quantity)
+    # Validate input
+    if cartitem_id is None or quantity is None:
+        return Response({"detail": "item_id and quantity are required."}, status=400)
 
-    cartitem = CartItem.objects.get(id=cartitem_id)
-    cartitem.quantity = quantity 
-    cartitem.save()
+    try:
+        cartitem = CartItem.objects.get(id=cartitem_id)
+    except CartItem.DoesNotExist:
+        return Response({"detail": "Cart item not found."}, status=404)
+
+    try:
+        cartitem.quantity = int(quantity)
+        cartitem.save()
+    except ValueError:
+        return Response({"detail": "Quantity must be an integer."}, status=400)
 
     serializer = CartItemSerializer(cartitem)
-    return Response({"data": serializer.data, "message": "Cartitem updated successfully!"})
+    return Response({"data": serializer.data, "message": "Cart item updated successfully!"})
 
 
 
@@ -406,25 +450,61 @@ def get_cart(request, cart_code):
 
 
 
+cart_code_param = openapi.Parameter(
+    'cart_code', openapi.IN_QUERY, description="Cart code", type=openapi.TYPE_STRING, required=True
+)
+
+@swagger_auto_schema(
+    method='get',
+    manual_parameters=[cart_code_param],
+    responses={200: 'OK'}
+)
 @api_view(['GET'])
 def get_cart_stat(request):
     cart_code = request.query_params.get("cart_code")
-    cart = Cart.objects.filter(cart_code=cart_code).first()
-
-    if cart:
-        serializer = SimpleCartSerializer(cart)
-        return Response(serializer.data)
-    return Response({"error": "Cart not found."}, status=status.HTTP_404_NOT_FOUND)
+    if not cart_code:
+        return Response({"error": "cart_code is required"}, status=400)
+    # Your logic here
+    return Response({"message": f"Cart stats for {cart_code}"})
 
 
+cart_code_param = openapi.Parameter(
+    'cart_code', openapi.IN_QUERY,
+    description="Cart code string",
+    type=openapi.TYPE_STRING,
+    required=True
+)
+
+product_id_param = openapi.Parameter(
+    'product_id', openapi.IN_QUERY,
+    description="Product ID integer",
+    type=openapi.TYPE_INTEGER,
+    required=True
+)
+
+@swagger_auto_schema(manual_parameters=[cart_code_param, product_id_param],method='get')
 @api_view(['GET'])
 def product_in_cart(request):
     cart_code = request.query_params.get("cart_code")
     product_id = request.query_params.get("product_id")
-    
+
+    if not cart_code or not product_id:
+        return Response({"error": "Both cart_code and product_id are required."}, status=400)
+
+    try:
+        product_id = int(product_id)
+    except ValueError:
+        return Response({"error": "product_id must be an integer."}, status=400)
+
     cart = Cart.objects.filter(cart_code=cart_code).first()
-    product = Product.objects.get(id=product_id)
-    
+    if not cart:
+        return Response({"error": "Cart not found."}, status=404)
+
+    try:
+        product = Product.objects.get(id=product_id)
+    except Product.DoesNotExist:
+        return Response({"error": "Product not found."}, status=404)
+
     product_exists_in_cart = CartItem.objects.filter(cart=cart, product=product).exists()
 
     return Response({'product_in_cart': product_exists_in_cart})

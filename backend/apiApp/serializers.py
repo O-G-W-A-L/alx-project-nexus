@@ -100,21 +100,16 @@ class CategoryDetailSerializer(serializers.ModelSerializer):
         model = Category
         fields = ["id", "name", "image", "products"]
 
-
-
 class CartItemSerializer(serializers.ModelSerializer):
     product = ProductListSerializer(read_only=True)
     sub_total = serializers.SerializerMethodField()
     class Meta:
         model = CartItem 
         fields = ["id", "product", "quantity", "sub_total"]
-
     
     def get_sub_total(self, cartitem):
         total = cartitem.product.price * cartitem.quantity 
         return total
-
-
 
 class CartSerializer(serializers.ModelSerializer):
     cartitems = CartItemSerializer(read_only=True, many=True)
@@ -140,7 +135,13 @@ class CartStatSerializer(serializers.ModelSerializer):
         total = sum([item.quantity for item in items])
         return total
 
+class AddToCartSerializer(serializers.Serializer):
+    cart_code = serializers.CharField()
+    product_id = serializers.IntegerField()
 
+class UpdateCartItemSerializer(serializers.Serializer):
+    item_id = serializers.IntegerField()
+    quantity = serializers.IntegerField()
 
 
 
