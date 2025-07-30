@@ -424,6 +424,18 @@ def get_orders(request):
     return Response(serializer.data)
 
 
+address_schema = openapi.Schema(
+    type=openapi.TYPE_OBJECT,
+    required=['email', 'street', 'city', 'state', 'phone'],
+    properties={
+        'email': openapi.Schema(type=openapi.TYPE_STRING, format='email'),
+        'street': openapi.Schema(type=openapi.TYPE_STRING),
+        'city': openapi.Schema(type=openapi.TYPE_STRING),
+        'state': openapi.Schema(type=openapi.TYPE_STRING),
+        'phone': openapi.Schema(type=openapi.TYPE_STRING),
+    },
+)
+@swagger_auto_schema(method='post', request_body=address_schema)
 @api_view(["POST"])
 def add_address(request):
     email = request.data.get("email")
@@ -434,31 +446,54 @@ def add_address(request):
 
     if not email:
         return Response({"error": "Email is required"}, status=400)
-    
-    customer = User.objects.get(email=email)
 
-    address, created = CustomerAddress.objects.get_or_create(
-        customer=customer)
-    address.email = email 
-    address.street = street 
-    address.city = city 
+    try:
+        customer = User.objects.get(email=email)
+    except User.DoesNotExist:
+        return Response({"error": "User not found"}, status=404)
+
+    address, created = CustomerAddress.objects.get_or_create(customer=customer)
+    address.street = street
+    address.city = city
     address.state = state
-    address.phone = phone 
+    address.phone = phone
     address.save()
 
     serializer = CustomerAddressSerializer(address)
-    return Response(serializer.data)
+    return Response(serializer.data, status=201)
 
 
+
+@swagger_auto_schema(
+    method='get',
+    manual_parameters=[
+        openapi.Parameter(
+            'email',
+            openapi.IN_QUERY,
+            description="Email of the user whose address is being requested",
+            type=openapi.TYPE_STRING,
+            required=True
+        )
+    ],
+    responses={
+        200: CustomerAddressSerializer(),
+        404: 'Address not found'
+    }
+)
 @api_view(["GET"])
 def get_address(request):
-    email = request.query_params.get("email") 
+    email = request.query_params.get("email")
+    
+    if not email:
+        return Response({"error": "Email parameter is required"}, status=400)
+
     address = CustomerAddress.objects.filter(customer__email=email)
+    
     if address.exists():
-        address = address.last()
-        serializer = CustomerAddressSerializer(address)
+        serializer = CustomerAddressSerializer(address.last())
         return Response(serializer.data, status=status.HTTP_200_OK)
-    return Response({"error": "Address not found"}, status=200)
+
+    return Response({"error": "Address not found"}, status=status.HTTP_404_NOT_FOUND)
 
 
 @api_view(["GET"])
