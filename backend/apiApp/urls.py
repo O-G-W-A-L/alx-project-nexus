@@ -1,17 +1,18 @@
-from django.urls import path 
+from django.urls import path, include
+from rest_framework.routers import DefaultRouter
 from . import views  
 from rest_framework_simplejwt.views import (
     TokenObtainPairView,
     TokenRefreshView,
 )
 
+router = DefaultRouter()
+router.register(r'products', views.ProductViewSet)
+router.register(r'categories', views.CategoryViewSet)
 
 
 urlpatterns = [
-    path("product_list", views.product_list, name="product_list"),
-    path("products/<slug:slug>", views.product_detail, name="product_detail"),
-    path("category_list", views.category_list, name="category_list"),
-    path("categories/<slug:slug>", views.category_detail, name="category_detail"),
+    path("", include(router.urls)), # Include router URLs for products and categories
     path("add_to_cart/", views.add_to_cart, name="add_to_cart"),
     path("update_cartitem_quantity/", views.update_cartitem_quantity, name="update_cartitem_quantity"),
     path("add_review/", views.add_review, name="add_review"),
@@ -38,6 +39,4 @@ urlpatterns = [
     path("product_in_cart", views.product_in_cart, name="product_in_cart"),
     path('token/', TokenObtainPairView.as_view(), name='token_obtain_pair'),
     path('token/refresh/', TokenRefreshView.as_view(), name='token_refresh'),
-
-
 ]
