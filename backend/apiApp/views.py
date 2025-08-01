@@ -7,6 +7,11 @@ from django.db.models import Q
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
 from rest_framework import status
+from rest_framework import viewsets
+from rest_framework.permissions import IsAdminUser, AllowAny
+from rest_framework import filters
+from django_filters.rest_framework import DjangoFilterBackend # Import DjangoFilterBackend
+
 from .models import Cart, CartItem, Category, CustomerAddress, Order, OrderItem, Product, Review, Wishlist
 from .serializers import CartItemSerializer, CartSerializer, CategoryDetailSerializer, CategoryListSerializer, CustomerAddressSerializer, OrderSerializer, ProductListSerializer, ProductDetailSerializer, ReviewSerializer, SimpleCartSerializer, UserSerializer, WishlistSerializer
 from .serializers import AddToCartSerializer  
@@ -18,6 +23,8 @@ from django.views.decorators.csrf import csrf_exempt
 from drf_yasg.utils import swagger_auto_schema
 from rest_framework import serializers
 from drf_yasg import openapi
+
+from .filters import ProductFilter # Keep this if ProductFilter is still used elsewhere or will be adapted
 
 logger = logging.getLogger(__name__)
 
@@ -33,31 +40,46 @@ def home(request):
 
 User = get_user_model()
 
-@api_view(['GET'])
-def product_list(request):
-    products = Product.objects.filter(featured=True)
-    serializer = ProductListSerializer(products, many=True)
-    return Response(serializer.data)
+class ProductViewSet(viewsets.ModelViewSet):
+    queryset = Product.objects.all()
+    serializer_class = ProductDetailSerializer # Use ProductDetailSerializer for full CRUD
+    lookup_field = 'slug'
+    filter_backends = [filters.OrderingFilter, filters.SearchFilter, DjangoFilterBackend]
+    ordering_fields = ['price', 'name', 'created_at'] # Assuming 'created_at' exists or can be added
+    search_fields = ['name', 'description', 'category__name']
+    filterset_class = ProductFilter # If you want to keep the custom filter
 
+    def get_serializer_class(self):
+        if self.action == 'list':
+            return ProductListSerializer
+        return ProductDetailSerializer
 
-@api_view(["GET"])
-def product_detail(request, slug):
-    product = Product.objects.get(slug=slug)
-    serializer = ProductDetailSerializer(product)
-    return Response(serializer.data)
+    def get_permissions(self):
+        if self.action in ['create', 'update', 'partial_update', 'destroy']:
+            self.permission_classes = [IsAdminUser]
+        else:
+            self.permission_classes = [AllowAny]
+        return super().get_permissions()
 
+class CategoryViewSet(viewsets.ModelViewSet):
+    queryset = Category.objects.all()
+    serializer_class = CategoryDetailSerializer
+    lookup_field = 'slug'
+    filter_backends = [filters.OrderingFilter, filters.SearchFilter]
+    ordering_fields = ['name']
+    search_fields = ['name']
 
-@api_view(["GET"])
-def category_list(request):
-    categories = Category.objects.all()
-    serializer = CategoryListSerializer(categories, many=True)
-    return Response(serializer.data)
+    def get_serializer_class(self):
+        if self.action == 'list':
+            return CategoryListSerializer
+        return CategoryDetailSerializer
 
-@api_view(["GET"])
-def category_detail(request, slug):
-    category = Category.objects.get(slug=slug)
-    serializer = CategoryDetailSerializer(category)
-    return Response(serializer.data)
+    def get_permissions(self):
+        if self.action in ['create', 'update', 'partial_update', 'destroy']:
+            self.permission_classes = [IsAdminUser]
+        else:
+            self.permission_classes = [AllowAny]
+        return super().get_permissions()
 
 
 @swagger_auto_schema(
@@ -352,9 +374,7 @@ def my_webhook_view(request):
 
     fulfill_checkout(session, cart_code)
 
-
   return HttpResponse(status=200)
-
 
 
 def fulfill_checkout(session, cart_code):
@@ -364,10 +384,7 @@ def fulfill_checkout(session, cart_code):
         currency=session["currency"],
         customer_email=session["customer_email"],
         status="Paid")
-    
-
     print(session)
-
 
     cart = Cart.objects.get(cart_code=cart_code)
     cartitems = cart.cartitems.all()
@@ -377,12 +394,6 @@ def fulfill_checkout(session, cart_code):
                                              quantity=item.quantity)
     
     cart.delete()
-
-
-
-
-# Newly Added
-
 
 
 # Serializer for Swagger and validation
@@ -586,4 +597,3 @@ def product_in_cart(request):
     product_exists_in_cart = CartItem.objects.filter(cart=cart, product=product).exists()
 
     return Response({'product_in_cart': product_exists_in_cart})
-
