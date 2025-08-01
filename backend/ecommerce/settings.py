@@ -44,6 +44,7 @@ INSTALLED_APPS = [
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
+    'django_filters',
     'apiApp',
     'rest_framework',
     'corsheaders',
@@ -169,6 +170,23 @@ REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': (
         'rest_framework_simplejwt.authentication.JWTAuthentication',
     ),
+    'DEFAULT_PAGINATION_CLASS': 'apiApp.pagination.CustomPagination',
+    'DEFAULT_FILTER_BACKENDS': (
+        'rest_framework.filters.OrderingFilter',
+        'rest_framework.filters.SearchFilter',
+    ),
+}
+
+SWAGGER_SETTINGS = {
+    'SECURITY_DEFINITIONS': {
+        'Bearer': {
+            'type': 'apiKey',
+            'name': 'Authorization',
+            'in': 'header',
+            'description': "JWT Authorization header using the Bearer scheme. Example: 'Bearer your_access_token_here'",
+        }
+    },
+    'USE_SESSION_AUTH': False,  # Disable Django session login
 }
 
 STRIPE_SECRET_KEY = os.environ.get("STRIPE_SECRET_KEY")
