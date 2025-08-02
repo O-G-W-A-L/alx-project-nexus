@@ -10,7 +10,7 @@ from rest_framework import status
 from rest_framework import viewsets
 from rest_framework.permissions import IsAdminUser, AllowAny
 from rest_framework import filters
-from django_filters.rest_framework import DjangoFilterBackend # Import DjangoFilterBackend
+from django_filters.rest_framework import DjangoFilterBackend
 
 from .models import Cart, CartItem, Category, CustomerAddress, Order, OrderItem, Product, Review, Wishlist
 from .serializers import CartItemSerializer, CartSerializer, CategoryDetailSerializer, CategoryListSerializer, CustomerAddressSerializer, OrderSerializer, ProductListSerializer, ProductDetailSerializer, ReviewSerializer, SimpleCartSerializer, UserSerializer, WishlistSerializer
@@ -24,7 +24,7 @@ from drf_yasg.utils import swagger_auto_schema
 from rest_framework import serializers
 from drf_yasg import openapi
 
-from .filters import ProductFilter # Keep this if ProductFilter is still used elsewhere or will be adapted
+from .filters import ProductFilter
 
 logger = logging.getLogger(__name__)
 
@@ -35,7 +35,7 @@ endpoint_secret = settings.WEBHOOK_SECRET
 from django.http import JsonResponse
 
 def home(request):
-    return JsonResponse({"message": "Welcome to our E-commerce API!"})
+    return JsonResponse({"message": "Welcome to our E-Commerce API!"})
 
 
 User = get_user_model()
@@ -236,17 +236,21 @@ def update_review(request, pk):
 
 @api_view(['DELETE'])
 def delete_review(request, pk):
-    review = Review.objects.get(id=pk) 
-    review.delete()
-
-    return Response("Review deleted successfully!", status=204)
+    try:
+        review = Review.objects.get(id=pk) 
+        review.delete()
+        return Response("Review deleted successfully!", status=status.HTTP_204_NO_CONTENT)
+    except Review.DoesNotExist:
+        return Response({"detail": "Review not found."}, status=status.HTTP_404_NOT_FOUND)
 
 @api_view(['DELETE'])
 def delete_cartitem(request, pk):
-    cartitem = CartItem.objects.get(id=pk) 
-    cartitem.delete()
-
-    return Response("Cartitem deleted successfully!", status=204)
+    try:
+        cartitem = CartItem.objects.get(id=pk) 
+        cartitem.delete()
+        return Response("Cart item deleted successfully!", status=status.HTTP_204_NO_CONTENT)
+    except CartItem.DoesNotExist:
+        return Response({"detail": "Cart item not found."}, status=status.HTTP_404_NOT_FOUND)
 
 
 
@@ -284,7 +288,7 @@ query_param = openapi.Parameter(
 def product_search(request):
     query = request.query_params.get("query") 
     if not query:
-        return Response("No query provided", status=400)
+        return Response({"detail": "No query provided"}, status=status.HTTP_400_BAD_REQUEST)
     
     products = Product.objects.filter(
         Q(name__icontains=query) | 
