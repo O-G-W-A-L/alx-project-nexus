@@ -12,7 +12,7 @@ router.register(r'categories', views.CategoryViewSet)
 
 
 urlpatterns = [
-    path("", include(router.urls)), # Include router URLs for products and categories
+    path("", include(router.urls)),
     path("add_to_cart/", views.add_to_cart, name="add_to_cart"),
     path("update_cartitem_quantity/", views.update_cartitem_quantity, name="update_cartitem_quantity"),
     path("add_review/", views.add_review, name="add_review"),
