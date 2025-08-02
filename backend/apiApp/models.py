@@ -1,7 +1,8 @@
 from django.conf import settings
-from django.db import models
+from django.db import models, transaction, IntegrityError
 from django.utils.text import slugify
 from django.contrib.auth.models import AbstractUser
+from django.db.models import F
 
 # Custom User Model
 # This allows for email-based authentication and a profile picture URL
@@ -18,56 +19,82 @@ class Category(models.Model):
     slug = models.SlugField(unique=True, blank=True, db_index=True)
     image = models.FileField(upload_to="category_img", blank=True, null=True)
 
+    class Meta:
+        ordering = ['name'] # Default ordering for categories
+
     def __str__(self):
         return self.name
 
     def save(self, *args, **kwargs):
-
         if not self.slug:
-            self.slug = slugify(self.name)
-            unique_slug = self.slug
+            base_slug = slugify(self.name)
+            self.slug = base_slug
             counter = 1
-            if Product.objects.filter(slug=unique_slug).exists():
-                unique_slug = f'{self.slug}-{counter}'
+            # Ensure slug uniqueness
+            while Category.objects.filter(slug=self.slug).exists():
+                self.slug = f"{base_slug}-{counter}"
                 counter += 1
-            self.slug = unique_slug
-        
-        super().save(*args, **kwargs)
+            # Call super().save() outside the loop after a unique slug is found
+            super().save(*args, **kwargs)
+        else:
+            super().save(*args, **kwargs)
 
 # Models for Products, Cart, CartItem, Review, Wishlist, Order, and CustomerAddress
 class Product(models.Model):
     name = models.CharField(max_length=100)
     description = models.TextField()
     price = models.DecimalField(max_digits=10, decimal_places=2)
+    stock = models.PositiveIntegerField(default=0) # Added for stock management
     slug = models.SlugField(unique=True, blank=True, db_index=True)
     image = models.ImageField(upload_to="product_img", blank=True, null=True)
     featured = models.BooleanField(default=False)
     category = models.ForeignKey(Category, on_delete=models.SET_NULL, related_name="products",  blank=True, null=True, db_index=True)
 
+    class Meta:
+        ordering = ['name'] # Default ordering for products
+
     def __str__(self):
         return self.name
     
     def save(self, *args, **kwargs):
-
         if not self.slug:
-            self.slug = slugify(self.name)
-            unique_slug = self.slug
+            base_slug = slugify(self.name)
+            self.slug = base_slug
             counter = 1
-            if Product.objects.filter(slug=unique_slug).exists():
-                unique_slug = f'{self.slug}-{counter}'
+            # Ensure slug uniqueness
+            while Product.objects.filter(slug=self.slug).exists():
+                self.slug = f"{base_slug}-{counter}"
                 counter += 1
-            self.slug = unique_slug
-        
-        super().save(*args, **kwargs)
+            # Call super().save() outside the loop after a unique slug is found
+            super().save(*args, **kwargs)
+        else:
+            super().save(*args, **kwargs)
 
 # Cart and CartItem models
 class Cart(models.Model):
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="carts", null=True, blank=True) # Link cart to a user
+    cart_code = models.CharField(max_length=11, unique=True, db_index=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+import uuid # Import uuid for generating unique codes
+
+class Cart(models.Model):
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="carts", null=True, blank=True) # Link cart to a user
     cart_code = models.CharField(max_length=11, unique=True, db_index=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     def __str__(self):
         return self.cart_code
+
+    @staticmethod
+    def generate_unique_cart_code():
+        """Generates a unique 11-character alphanumeric cart code."""
+        while True:
+            code = str(uuid.uuid4().hex)[:11].upper()
+            if not Cart.objects.filter(cart_code=code).exists():
+                return code
 
 class CartItem(models.Model):
     cart = models.ForeignKey(Cart, on_delete=models.CASCADE, related_name="cartitems")
