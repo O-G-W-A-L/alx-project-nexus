@@ -1,7 +1,5 @@
 import logging
 import stripe 
-import logging
-import stripe 
 from django.conf import settings
 from django.shortcuts import render, get_object_or_404
 from django.contrib.auth import get_user_model
@@ -53,21 +51,34 @@ def home(request):
 User = get_user_model()
 
 class ProductViewSet(viewsets.ModelViewSet):
+    """
+    A ViewSet for viewing and editing product instances.
+    Provides CRUD operations for products.
+    """
     # Optimize queryset for common access patterns to avoid N+1 queries
     queryset = Product.objects.select_related('category', 'rating').prefetch_related('reviews').all()
     serializer_class = ProductDetailSerializer # Use ProductDetailSerializer for full CRUD
-    lookup_field = 'slug'
+    lookup_field = 'slug' # Use slug for URL lookups
     filter_backends = [filters.OrderingFilter, filters.SearchFilter, DjangoFilterBackend]
-    ordering_fields = ['price', 'name', 'created_at'] # Assuming 'created_at' exists or can be added
-    search_fields = ['name', 'description', 'category__name']
-    filterset_class = ProductFilter # If you want to keep the custom filter
+    ordering_fields = ['price', 'name', 'created_at'] # Fields available for ordering
+    search_fields = ['name', 'description', 'category__name'] # Fields available for search
+    filterset_class = ProductFilter # Custom filter class for products
 
     def get_serializer_class(self):
+        """
+        Returns the appropriate serializer class based on the action.
+        Uses ProductListSerializer for list view and ProductDetailSerializer for detail views.
+        """
         if self.action == 'list':
             return ProductListSerializer
         return ProductDetailSerializer
 
     def get_permissions(self):
+        """
+        Sets permissions for different actions.
+        Only admin users can create, update, or delete products.
+        Any user can view products.
+        """
         if self.action in ['create', 'update', 'partial_update', 'destroy']:
             self.permission_classes = [IsAdminUser]
         else:
@@ -75,20 +86,33 @@ class ProductViewSet(viewsets.ModelViewSet):
         return super().get_permissions()
 
 class CategoryViewSet(viewsets.ModelViewSet):
+    """
+    A ViewSet for viewing and editing category instances.
+    Provides CRUD operations for categories.
+    """
     # Optimize queryset for common access patterns to avoid N+1 queries
     queryset = Category.objects.prefetch_related('products').all()
     serializer_class = CategoryDetailSerializer
-    lookup_field = 'slug'
+    lookup_field = 'slug' # Use slug for URL lookups
     filter_backends = [filters.OrderingFilter, filters.SearchFilter]
-    ordering_fields = ['name']
-    search_fields = ['name']
+    ordering_fields = ['name'] # Fields available for ordering
+    search_fields = ['name'] # Fields available for search
 
     def get_serializer_class(self):
+        """
+        Returns the appropriate serializer class based on the action.
+        Uses CategoryListSerializer for list view and CategoryDetailSerializer for detail views.
+        """
         if self.action == 'list':
             return CategoryListSerializer
         return CategoryDetailSerializer
 
     def get_permissions(self):
+        """
+        Sets permissions for different actions.
+        Only admin users can create, update, or delete categories.
+        Any user can view categories.
+        """
         if self.action in ['create', 'update', 'partial_update', 'destroy']:
             self.permission_classes = [IsAdminUser]
         else:
@@ -109,10 +133,17 @@ class CategoryViewSet(viewsets.ModelViewSet):
 @permission_classes([IsAuthenticated])
 @ratelimit(key='user', rate='5/s', block=True)
 def add_to_cart(request):
+    """
+    Adds a product to a user's cart or an anonymous cart.
+    If the cart code is provided, it attempts to use that cart.
+    If the cart is anonymous and the user logs in, the cart is assigned to the user.
+    Handles stock validation and atomic updates for cart items.
+    """
     serializer = AddToCartSerializer(data=request.data)
     try:
         serializer.is_valid(raise_exception=True)
     except ValidationError as e:
+        logger.error(f"Add to cart validation error: {e.detail}")
         return Response({"detail": e.detail}, status=status.HTTP_400_BAD_REQUEST)
 
     cart_code = serializer.validated_data["cart_code"]
@@ -120,60 +151,73 @@ def add_to_cart(request):
     quantity = serializer.validated_data.get("quantity", 1)
 
     try:
+        # Attempt to retrieve the cart and product
         cart = get_object_or_404(Cart, cart_code=cart_code)
         product = get_object_or_404(Product, id=product_id)
     except Exception as e:
-        logger.error(f"Error retrieving cart or product: {e}")
+        logger.error(f"Error retrieving cart ({cart_code}) or product ({product_id}): {e}")
         return Response({"detail": "Cart or Product not found."}, status=status.HTTP_404_NOT_FOUND)
 
     # Use a transaction to ensure atomicity for cart operations
     with transaction.atomic():
-        # Try to get an existing cart for the user, or create a new one
-        # If cart_code is provided, try to use that cart, but ensure it's either anonymous or belongs to the user
+        # Logic to handle cart ownership and creation
         if cart_code:
             try:
                 cart = Cart.objects.get(cart_code=cart_code)
-                # If cart exists and is anonymous, assign it to the user
+                # If cart exists and is anonymous, assign it to the authenticated user
                 if request.user.is_authenticated and cart.user is None:
                     cart.user = request.user
                     cart.save()
+                    logger.info(f"Anonymous cart {cart_code} assigned to user {request.user.email}.")
                 # If cart exists and belongs to another user, deny access
                 elif request.user.is_authenticated and cart.user != request.user:
+                    logger.warning(f"User {request.user.email} attempted to access cart {cart_code} belonging to another user.")
                     return Response({"detail": "This cart code belongs to another user."}, status=status.HTTP_403_FORBIDDEN)
             except Cart.DoesNotExist:
-                # If cart_code doesn't exist, create a new one for the user
+                # If cart_code doesn't exist, create a new one for the user (or anonymous)
                 cart = Cart.objects.create(user=request.user if request.user.is_authenticated else None, cart_code=cart_code)
+                logger.info(f"New cart {cart_code} created for user {request.user.email if request.user.is_authenticated else 'anonymous'}.")
         else:
             # If no cart_code is provided, try to get the user's existing cart or create a new one
             if request.user.is_authenticated:
                 cart, created = Cart.objects.get_or_create(user=request.user, defaults={'cart_code': Cart.generate_unique_cart_code()})
+                if created:
+                    logger.info(f"New cart {cart.cart_code} created for authenticated user {request.user.email}.")
+                else:
+                    logger.info(f"Existing cart {cart.cart_code} retrieved for authenticated user {request.user.email}.")
             else:
                 # For anonymous users, a cart_code must be provided to identify the cart
+                logger.warning("Anonymous user attempted to add to cart without providing a cart_code.")
                 return Response({"detail": "cart_code is required for anonymous users."}, status=status.HTTP_400_BAD_REQUEST)
 
-        # Check if product exists and has enough stock
+        # Check if product exists and has enough stock before adding to cart
         try:
             product = Product.objects.select_for_update().get(id=product_id) # Lock product row for update
         except Product.DoesNotExist:
+            logger.error(f"Product with ID {product_id} not found during add to cart operation.")
             return Response({"detail": "Product not found."}, status=status.HTTP_404_NOT_FOUND)
 
         if product.stock < quantity:
+            logger.warning(f"Insufficient stock for product {product.name}. Requested: {quantity}, Available: {product.stock}.")
             return Response({"detail": f"Not enough stock for {product.name}. Available: {product.stock}"}, status=status.HTTP_400_BAD_REQUEST)
 
+        # Get or create cart item and update quantity
         cartitem, created = CartItem.objects.get_or_create(product=product, cart=cart)
         if not created:
             # Atomically update quantity to prevent race conditions
             CartItem.objects.filter(id=cartitem.id).update(quantity=F('quantity') + quantity)
             cartitem.refresh_from_db() # Refresh to get the updated quantity
+            logger.info(f"Updated quantity for product {product.name} in cart {cart.cart_code} to {cartitem.quantity}.")
         else:
             cartitem.quantity = quantity
             cartitem.save()
+            logger.info(f"Added product {product.name} to cart {cart.cart_code} with quantity {quantity}.")
 
-        # Update product stock (decrement)
-        # This will be handled during checkout for final decrement, but a temporary decrement could be considered here
-        # For now, the stock check is sufficient. Final decrement happens at checkout.
+        # Note: Product stock decrement is handled during checkout for final decrement.
+        # A temporary decrement here could be considered for more immediate stock reflection,
+        # but the current approach defers final decrement to payment fulfillment.
 
-        response_serializer = CartSerializer(cart) # Consider optimizing this serializer call with prefetch_related
+        response_serializer = CartSerializer(cart) # Serialize the updated cart
         return Response(response_serializer.data, status=status.HTTP_200_OK)
 
 
@@ -204,15 +248,10 @@ def update_cartitem_quantity(request):
         logger.error(f"Error retrieving cart item: {e}")
         return Response({"detail": "Cart item not found."}, status=status.HTTP_404_NOT_FOUND)
 
-    # Ensure the user owns the cart associated with the cart item (assuming cart is linked to user)
-    # This requires a user field on the Cart model or a way to link it.
-    # For now, assuming cart_code is sufficient for identification, but for proper auth,
-    # the cart should be associated with the authenticated user.
-    # Ensure the user owns the cart associated with the cart item
-    if request.user.is_authenticated and cartitem.cart.user != request.user:
-        return Response({"detail": "You do not have permission to update this cart item."}, status=status.HTTP_403_FORBIDDEN)
-    # If cart is anonymous, allow update if no user is authenticated
-    elif not request.user.is_authenticated and cartitem.cart.user is not None:
+    # Authorization check:
+    # If the cart is associated with a user, ensure the request user is that user.
+    # If the cart is anonymous (cart.user is None), allow any user to modify it via cart_code.
+    if cartitem.cart.user is not None and cartitem.cart.user != request.user:
         return Response({"detail": "You do not have permission to update this cart item."}, status=status.HTTP_403_FORBIDDEN)
 
     with transaction.atomic():
@@ -357,116 +396,16 @@ def delete_cartitem(request, pk):
         logger.error(f"Error retrieving cart item: {e}")
         return Response({"detail": "Cart item not found."}, status=status.HTTP_404_NOT_FOUND)
 
-    # Ensure the user owns the cart associated with the cart item
-    if request.user.is_authenticated and cartitem.cart.user != request.user:
-        return Response({"detail": "You do not have permission to delete this cart item."}, status=status.HTTP_403_FORBIDDEN)
-    # If cart is anonymous, allow deletion if no user is authenticated
-    elif not request.user.is_authenticated and cartitem.cart.user is not None:
+    # Authorization check:
+    # If the cart is associated with a user, ensure the request user is that user.
+    # If the cart is anonymous (cart.user is None), allow any user to delete it via cart_code.
+    if cartitem.cart.user is not None and cartitem.cart.user != request.user:
         return Response({"detail": "You do not have permission to delete this cart item."}, status=status.HTTP_403_FORBIDDEN)
 
     cartitem.delete()
     return Response({"message": "Cart item deleted successfully!"}, status=status.HTTP_204_NO_CONTENT)
 
 
-@swagger_auto_schema(
-    method='post',
-    request_body=ReviewSerializer(),
-    responses={
-        201: ReviewSerializer(),
-        400: 'Bad Request',
-        404: 'Not Found',
-        403: 'Forbidden'
-    }
-)
-@api_view(["POST"])
-@permission_classes([IsAuthenticated])
-@ratelimit(key='user', rate='1/m', block=True) # Limit to 1 review per minute per user
-def add_review(request):
-    product_id = request.data.get("product_id")
-    
-    try:
-        product = get_object_or_404(Product, id=product_id)
-    except Exception as e:
-        logger.error(f"Error retrieving product: {e}")
-        return Response({"detail": "Product not found."}, status=status.HTTP_404_NOT_FOUND)
-
-    serializer = ReviewSerializer(data=request.data, context={'request': request, 'product': product})
-    try:
-        serializer.is_valid(raise_exception=True)
-    except ValidationError as e:
-        return Response({"detail": e.detail}, status=status.HTTP_400_BAD_REQUEST)
-
-    # User is already authenticated via permission_classes
-    user = request.user
-    
-    review = Review.objects.create(product=product, user=user, **serializer.validated_data)
-    response_serializer = ReviewSerializer(review)
-    return Response(response_serializer.data, status=status.HTTP_201_CREATED)
-
-
-update_review_request = openapi.Schema(
-    type=openapi.TYPE_OBJECT,
-    required=['rating'],
-    properties={
-        'rating': openapi.Schema(type=openapi.TYPE_INTEGER, description='Rating from 1 to 5'),
-        'review': openapi.Schema(type=openapi.TYPE_STRING, description='Review text'),
-    },
-)
-
-@swagger_auto_schema(method='put', request_body=update_review_request, responses={200: ReviewSerializer()})
-@api_view(['PUT'])
-@permission_classes([IsAuthenticated])
-def update_review(request, pk):
-    try:
-        review = get_object_or_404(Review, id=pk)
-    except Exception as e:
-        logger.error(f"Error retrieving review: {e}")
-        return Response({"detail": "Review not found."}, status=status.HTTP_404_NOT_FOUND)
-
-    if review.user != request.user:
-        return Response({"detail": "You do not have permission to update this review."}, status=status.HTTP_403_FORBIDDEN)
-
-    serializer = ReviewSerializer(review, data=request.data, partial=True, context={'request': request, 'product': review.product})
-    try:
-        serializer.is_valid(raise_exception=True)
-    except ValidationError as e:
-        return Response({"detail": e.detail}, status=status.HTTP_400_BAD_REQUEST)
-
-    serializer.save()
-    return Response(serializer.data, status=status.HTTP_200_OK)
-
-
-
-@api_view(['DELETE'])
-@permission_classes([IsAuthenticated])
-def delete_review(request, pk):
-    try:
-        review = get_object_or_404(Review, id=pk) 
-    except Exception as e:
-        logger.error(f"Error retrieving review: {e}")
-        return Response({"detail": "Review not found."}, status=status.HTTP_404_NOT_FOUND)
-
-    if review.user != request.user:
-        return Response({"detail": "You do not have permission to delete this review."}, status=status.HTTP_403_FORBIDDEN)
-
-    review.delete()
-    return Response({"message": "Review deleted successfully!"}, status=status.HTTP_204_NO_CONTENT)
-
-@api_view(['DELETE'])
-@permission_classes([IsAuthenticated])
-def delete_cartitem(request, pk):
-    try:
-        cartitem = get_object_or_404(CartItem, id=pk) 
-    except Exception as e:
-        logger.error(f"Error retrieving cart item: {e}")
-        return Response({"detail": "Cart item not found."}, status=status.HTTP_404_NOT_FOUND)
-
-    # Assuming cart is linked to user for proper authorization
-    # if cartitem.cart.user != request.user:
-    #     return Response({"detail": "You do not have permission to delete this cart item."}, status=status.HTTP_403_FORBIDDEN)
-
-    cartitem.delete()
-    return Response({"message": "Cart item deleted successfully!"}, status=status.HTTP_204_NO_CONTENT)
 
 
 
@@ -546,27 +485,48 @@ def product_search(request):
 
 
 
+@swagger_auto_schema(
+    method='post',
+    request_body=openapi.Schema(
+        type=openapi.TYPE_OBJECT,
+        required=['cart_code'],
+        properties={
+            'cart_code': openapi.Schema(type=openapi.TYPE_STRING, description='Unique code of the cart to checkout.'),
+        },
+    ),
+    responses={
+        200: openapi.Response("Checkout session URL", openapi.Schema(type=openapi.TYPE_OBJECT, properties={'data': openapi.Schema(type=openapi.TYPE_STRING)})),
+        400: 'Bad Request',
+        403: 'Forbidden',
+        404: 'Not Found',
+        500: 'Internal Server Error'
+    },
+)
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 @ratelimit(key='user', rate='1/m', block=True) # Limit checkout session creation
 def create_checkout_session(request):
+    """
+    Creates a Stripe Checkout Session for the specified cart.
+    Requires authentication and the cart_code in the request body.
+    Performs stock validation and ensures the user has permission to checkout the cart.
+    """
     cart_code = request.data.get("cart_code")
     
     if not cart_code:
+        logger.warning("create_checkout_session: cart_code not provided in request.")
         return Response({"detail": "cart_code is required."}, status=status.HTTP_400_BAD_REQUEST)
 
     try:
         cart = get_object_or_404(Cart, cart_code=cart_code)
     except Exception as e:
-        logger.error(f"Error retrieving cart for checkout: {e}")
+        logger.error(f"Error retrieving cart for checkout (cart_code: {cart_code}): {e}")
         return Response({"detail": "Cart not found."}, status=status.HTTP_404_NOT_FOUND)
 
-    # Ensure the cart belongs to the authenticated user if carts are user-specific
-    # Ensure the cart belongs to the authenticated user
-    if request.user.is_authenticated and cart.user != request.user:
-        return Response({"detail": "You do not have permission to checkout this cart."}, status=status.HTTP_403_FORBIDDEN)
-    # If cart is anonymous, allow checkout if no user is authenticated
-    elif not request.user.is_authenticated and cart.user is not None:
+    # Authorization check:
+    # If the cart is associated with a user, ensure the request user is that user.
+    # If the cart is anonymous (cart.user is None), allow any user to checkout via cart_code.
+    if cart.user is not None and cart.user != request.user:
         return Response({"detail": "You do not have permission to checkout this cart."}, status=status.HTTP_403_FORBIDDEN)
 
     if not cart.cartitems.exists():
@@ -681,18 +641,20 @@ def fulfill_checkout(session, cart_code, user_id):
                 customer_email=session["customer_email"],
                 status="Paid"
             )
-            logger.info(f"Order {order.id} created for user {user.email}")
+            logger.info(f"Order {order.id} created for user {user.email} with Stripe ID {session['id']}.")
 
             cart = get_object_or_404(Cart, cart_code=cart_code)
             cartitems = cart.cartitems.select_related('product').select_for_update() # Lock cart items and products
+            logger.info(f"Fulfilling order for cart {cart_code} with {cartitems.count()} items.")
 
             for item in cartitems:
                 # Decrement product stock atomically
                 Product.objects.filter(id=item.product.id).update(stock=F('stock') - item.quantity)
                 OrderItem.objects.create(order=order, product=item.product, quantity=item.quantity)
+                logger.info(f"Decremented stock for product {item.product.name} by {item.quantity}.")
             
             cart.delete()
-            logger.info(f"Cart {cart_code} deleted after successful checkout.")
+            logger.info(f"Cart {cart_code} deleted after successful checkout and order fulfillment.")
 
         except Product.DoesNotExist:
             logger.error(f"Product not found during fulfillment for cart {cart_code}. This should not happen if stock check was done.")
@@ -707,75 +669,6 @@ def fulfill_checkout(session, cart_code, user_id):
 
 
 
-@csrf_exempt
-def my_webhook_view(request):
-  payload = request.body
-  sig_header = request.META.get('HTTP_STRIPE_SIGNATURE') # Use .get for safety
-  event = None
-
-  if not sig_header:
-      logger.warning("Webhook received without Stripe-Signature header.")
-      return HttpResponse(status=400)
-
-  try:
-    event = stripe.Webhook.construct_event(
-      payload, sig_header, endpoint_secret
-    )
-  except ValueError as e:
-    logger.error(f"Invalid payload for Stripe webhook: {e}")
-    return HttpResponse(status=400)
-  except stripe.error.SignatureVerificationError as e:
-    logger.error(f"Invalid signature for Stripe webhook: {e}")
-    return HttpResponse(status=400)
-  except Exception as e:
-    logger.error(f"Unexpected error during Stripe webhook processing: {e}")
-    return HttpResponse(status=500)
-
-  if (
-    event['type'] == 'checkout.session.completed'
-    or event['type'] == 'checkout.session.async_payment_succeeded'
-  ):
-    session = event['data']['object']
-    cart_code = session.get("metadata", {}).get("cart_code")
-    user_id = session.get("metadata", {}).get("user_id")
-
-    if not cart_code or not user_id:
-        logger.error(f"Missing metadata in checkout session: cart_code={cart_code}, user_id={user_id}")
-        return HttpResponse(status=400)
-
-    try:
-        fulfill_checkout(session, cart_code, user_id)
-    except Exception as e:
-        logger.error(f"Error fulfilling checkout for session {session.id}: {e}")
-        return HttpResponse(status=500)
-
-  return HttpResponse(status=200)
-
-
-def fulfill_checkout(session, cart_code, user_id):
-    try:
-        user = get_object_or_404(User, id=user_id)
-        order = Order.objects.create(
-            stripe_checkout_id=session["id"],
-            amount=session["amount_total"] / 100, # Convert cents to dollars
-            currency=session["currency"],
-            customer_email=session["customer_email"],
-            status="Paid"
-        )
-        logger.info(f"Order {order.id} created for user {user.email}")
-
-        cart = get_object_or_404(Cart, cart_code=cart_code)
-        cartitems = cart.cartitems.all()
-
-        for item in cartitems:
-            OrderItem.objects.create(order=order, product=item.product, quantity=item.quantity)
-        
-        cart.delete()
-        logger.info(f"Cart {cart_code} deleted after successful checkout.")
-
-    except Exception as e:
-        logger.error(f"Failed to fulfill checkout for cart {cart_code} and user {user_id}: {e}")
-        raise # Re-raise to be caught by webhook view
 
 
 # Serializer for Swagger and validation
@@ -817,7 +710,7 @@ def existing_user(request, email):
         User.objects.get(email=email)
         return Response({"exists": True}, status=status.HTTP_200_OK)
     except User.DoesNotExist:
-        return Response({"exists": False}, status=status.HTTP_200_OK) # Return 200 OK even if not found, just indicate existence
+        return Response({"exists": False}, status=status.HTTP_404_NOT_FOUND) # Return 404 if not found for consistency
 
 
 @api_view(['GET'])
@@ -991,6 +884,7 @@ def product_in_cart(request):
         cart = get_object_or_404(Cart, cart_code=cart_code)
         product = get_object_or_404(Product, id=product_id)
     except Exception as e:
+        logger.error(f"Error checking product in cart: {e}")
         logger.error(f"Error checking product in cart: {e}")
         return Response({"detail": "Cart or Product not found."}, status=status.HTTP_404_NOT_FOUND)
 
