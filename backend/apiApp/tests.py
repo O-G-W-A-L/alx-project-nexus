@@ -380,7 +380,7 @@ class CartAPITests(TestSetup):
     def test_get_cart_not_found(self):
         response = self.client.get(reverse('get_cart', args=['nonexistentcart']))
         self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
-        self.assertIn('error', response.data)
+        self.assertIn('detail', response.data)
 
     def test_product_in_cart_true(self):
         response = self.client.get(self.product_in_cart_url, {'cart_code': self.cart_code, 'product_id': self.product1.id})
@@ -422,8 +422,8 @@ class ReviewAPITests(TestSetup):
         }
         response = self.client.post(self.add_review_url, data, format='json')
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
-        self.assertIn('error', response.data)
-        self.assertEqual(response.data['error'], 'You already dropped a review for this product')
+        self.assertIn('detail', response.data)
+        self.assertEqual(response.data['detail'], 'You have already reviewed this product.')
 
     def test_add_review_product_not_found(self):
         data = {
@@ -434,7 +434,7 @@ class ReviewAPITests(TestSetup):
         }
         response = self.client.post(self.add_review_url, data, format='json')
         self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
-        self.assertIn('error', response.data)
+        self.assertIn('detail', response.data)
 
     def test_update_review(self):
         data = {
@@ -453,8 +453,8 @@ class ReviewAPITests(TestSetup):
         }
         response = self.client.put(self.update_review_url, data, format='json')
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
-        self.assertIn('error', response.data)
-        self.assertEqual(response.data['error'], 'Rating is required.')
+        self.assertIn('detail', response.data)
+        self.assertEqual(response.data['detail'], 'Rating is required.')
 
     def test_delete_review(self):
         response = self.client.delete(self.delete_review_url)
@@ -553,12 +553,12 @@ class CustomerAddressAPITests(TestSetup):
     def test_get_address_not_found(self):
         response = self.client.get(self.get_address_url, {'email': 'nonexistent@example.com'})
         self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
-        self.assertIn('error', response.data)
+        self.assertIn('detail', response.data)
 
     def test_get_address_missing_email(self):
         response = self.client.get(self.get_address_url) # Missing email param
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
-        self.assertIn('error', response.data)
+        self.assertIn('detail', response.data)
 
 class SearchAPITests(TestSetup):
     """
