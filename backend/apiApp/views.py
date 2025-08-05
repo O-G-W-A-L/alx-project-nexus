@@ -23,7 +23,8 @@ from .serializers import (
     CartItemSerializer, CartSerializer, CategoryDetailSerializer, CategoryListSerializer, 
     CustomerAddressSerializer, OrderSerializer, ProductListSerializer, ProductDetailSerializer, 
     ReviewSerializer, SimpleCartSerializer, UserSerializer, WishlistSerializer,
-    AddToCartSerializer, UpdateCartItemSerializer, AddToWishlistSerializer, AddressCreateSerializer
+    AddToCartSerializer, UpdateCartItemSerializer, AddToWishlistSerializer, AddressCreateSerializer,
+    PlaceOrderSerializer # Added PlaceOrderSerializer
 )
 
 from django.http import HttpResponse
@@ -714,11 +715,99 @@ def existing_user(request, email):
         return Response({"exists": False}, status=status.HTTP_404_NOT_FOUND) # Return 404 if not found for consistency
 
 
+@swagger_auto_schema(
+    method='post',
+    request_body=PlaceOrderSerializer(),
+    responses={
+        201: OrderSerializer(),
+        400: 'Bad Request',
+        403: 'Forbidden',
+        404: 'Not Found',
+        500: 'Internal Server Error'
+    },
+)
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+@ratelimit(key='user', rate='1/m', block=True) # Limit order placement
+def place_order(request):
+    """
+    Places a new order from the user's cart.
+    Supports 'Cash on Delivery' (COD) and 'Online Payment' methods.
+    For COD, creates the order directly. For Online, it's assumed a checkout session
+    would be initiated separately (or this endpoint would redirect to it).
+    """
+    serializer = PlaceOrderSerializer(data=request.data)
+    try:
+        serializer.is_valid(raise_exception=True)
+    except ValidationError as e:
+        logger.error(f"Place order validation error: {e.detail}")
+        return Response({"detail": e.detail}, status=status.HTTP_400_BAD_REQUEST)
+
+    cart_code = serializer.validated_data["cart_code"]
+    payment_method = serializer.validated_data["payment_method"]
+    user = request.user
+
+    try:
+        cart = get_object_or_404(Cart, cart_code=cart_code)
+    except Exception as e:
+        logger.error(f"Error retrieving cart for order placement (cart_code: {cart_code}): {e}")
+        return Response({"detail": "Cart not found."}, status=status.HTTP_404_NOT_FOUND)
+
+    # Authorization check: Ensure the cart belongs to the authenticated user
+    if cart.user is not None and cart.user != user:
+        return Response({"detail": "You do not have permission to place an order from this cart."}, status=status.HTTP_403_FORBIDDEN)
+    
+    if not cart.cartitems.exists():
+        return Response({"detail": "Cart is empty. Cannot place an order."}, status=status.HTTP_400_BAD_REQUEST)
+
+    with transaction.atomic():
+        # Lock products for update to prevent race conditions during stock check
+        cart_items_with_products = cart.cartitems.select_related('product').select_for_update()
+
+        total_amount = sum([item.quantity * item.product.price for item in cart_items_with_products])
+        
+        # Determine order status based on payment method
+        order_status = "Pending Delivery" if payment_method == "COD" else "Processing" # "Processing" for online, will become "Paid" via webhook
+
+        # Create the Order
+        order = Order.objects.create(
+            user=user,
+            amount=total_amount,
+            currency="usd", # Assuming USD for now, can be dynamic
+            customer_email=user.email,
+            payment_method=payment_method,
+            status=order_status,
+            # stripe_checkout_id will be null for COD, set by webhook for ONLINE
+        )
+        logger.info(f"Order {order.id} created for user {user.email} with payment method {payment_method} and status {order_status}.")
+
+        # Transfer CartItems to OrderItems and decrement stock
+        for item in cart_items_with_products:
+            product = item.product
+            if product.stock < item.quantity:
+                raise ValidationError({"detail": f"Not enough stock for {product.name}. Available: {product.stock}"})
+            
+            # Only decrement stock for COD orders immediately.
+            # For online payments, stock decrement happens in the webhook after successful payment.
+            if payment_method == "COD":
+                Product.objects.filter(id=product.id).update(stock=F('stock') - item.quantity)
+                logger.info(f"Decremented stock for product {product.name} by {item.quantity} for COD order.")
+
+            OrderItem.objects.create(order=order, product=product, quantity=item.quantity)
+        
+        # Clear the cart after order is placed
+        cart.delete()
+        logger.info(f"Cart {cart_code} deleted after order placement.")
+
+    response_serializer = OrderSerializer(order)
+    return Response(response_serializer.data, status=status.HTTP_201_CREATED)
+
+
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def get_orders(request):
     # Optimize query to avoid N+1 for order items and their products
-    orders = Order.objects.filter(customer_email=request.user.email).prefetch_related('items__product')
+    orders = Order.objects.filter(user=request.user).prefetch_related('items__product')
     serializer = OrderSerializer(orders, many=True)
     return Response(serializer.data, status=status.HTTP_200_OK)
 
