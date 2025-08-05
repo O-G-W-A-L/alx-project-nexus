@@ -24,11 +24,14 @@ from .serializers import (
     CustomerAddressSerializer, OrderSerializer, ProductListSerializer, ProductDetailSerializer, 
     ReviewSerializer, SimpleCartSerializer, UserSerializer, WishlistSerializer,
     AddToCartSerializer, UpdateCartItemSerializer, AddToWishlistSerializer, AddressCreateSerializer,
-    PlaceOrderSerializer # Added PlaceOrderSerializer
+    PlaceOrderSerializer
 )
 
 from django.http import HttpResponse
 from django.views.decorators.csrf import csrf_exempt
+
+# Import Celery tasks
+from .tasks import send_order_confirmation_email, process_pay_on_delivery_order, update_stock_after_order
 
 
 from drf_yasg.utils import swagger_auto_schema
@@ -482,11 +485,6 @@ def product_search(request):
     serializer = ProductListSerializer(products, many=True)
     return Response(serializer.data, status=status.HTTP_200_OK)
 
-
-
-
-
-
 @swagger_auto_schema(
     method='post',
     request_body=openapi.Schema(
@@ -650,11 +648,16 @@ def fulfill_checkout(session, cart_code, user_id):
             logger.info(f"Fulfilling order for cart {cart_code} with {cartitems.count()} items.")
 
             for item in cartitems:
-                # Decrement product stock atomically
-                Product.objects.filter(id=item.product.id).update(stock=F('stock') - item.quantity)
+                # Decrement product stock asynchronously via Celery task
+                # Product.objects.filter(id=item.product.id).update(stock=F('stock') - item.quantity) # Removed direct decrement
+                update_stock_after_order.delay(item.product.id, item.quantity)
                 OrderItem.objects.create(order=order, product=item.product, quantity=item.quantity)
-                logger.info(f"Decremented stock for product {item.product.name} by {item.quantity}.")
+                logger.info(f"Queued stock decrement for product {item.product.name} by {item.quantity} for online order.")
             
+            # Trigger order confirmation email for online payments
+            send_order_confirmation_email.delay(order.id)
+            logger.info(f"Queued order confirmation email for Order #{order.id} (online payment).")
+
             cart.delete()
             logger.info(f"Cart {cart_code} deleted after successful checkout and order fulfillment.")
 
@@ -790,11 +793,21 @@ def place_order(request):
             # Only decrement stock for COD orders immediately.
             # For online payments, stock decrement happens in the webhook after successful payment.
             if payment_method == "COD":
-                Product.objects.filter(id=product.id).update(stock=F('stock') - item.quantity)
-                logger.info(f"Decremented stock for product {product.name} by {item.quantity} for COD order.")
+                # Stock decrement is now handled by Celery task for COD
+                # Product.objects.filter(id=product.id).update(stock=F('stock') - item.quantity)
+                update_stock_after_order.delay(product.id, item.quantity)
+                logger.info(f"Queued stock decrement for product {product.name} by {item.quantity} for COD order.")
 
             OrderItem.objects.create(order=order, product=product, quantity=item.quantity)
         
+        # Trigger Celery tasks
+        send_order_confirmation_email.delay(order.id)
+        logger.info(f"Queued order confirmation email for Order #{order.id}.")
+
+        if payment_method == "COD":
+            process_pay_on_delivery_order.delay(order.id)
+            logger.info(f"Queued 'Pay on Delivery' processing for Order #{order.id}.")
+
         # Clear the cart after order is placed
         cart.delete()
         logger.info(f"Cart {cart_code} deleted after order placement.")

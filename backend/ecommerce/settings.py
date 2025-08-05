@@ -50,7 +50,17 @@ INSTALLED_APPS = [
     'corsheaders',
     'drf_yasg',
     'rest_framework_simplejwt',
+    'celery',
 ]
+
+# Celery Configuration
+CELERY_BROKER_URL = 'amqp://guest:guest@localhost:5672//'
+CELERY_ACCEPT_CONTENT = ['json']
+CELERY_TASK_SERIALIZER = 'json'
+CELERY_RESULT_SERIALIZER = 'json'
+CELERY_TIMEZONE = 'Africa/Kampala'
+CELERY_TASK_ALWAYS_EAGER = True # Set false in production
+CELERY_TASK_EAGER_PROPAGATES = True # Ensures exceptions are propagated when eager
 
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
@@ -199,6 +209,6 @@ SWAGGER_SETTINGS = {
     'USE_SESSION_AUTH': False,  # Disable Django session login
 }
 
-STRIPE_SECRET_KEY = os.environ.get("STRIPE_SECRET_KEY")
-STRIPE_PUBLIC_KEY = os.environ.get("STRIPE_PUBLIC_KEY")
-WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET")
+STRIPE_SECRET_KEY = config("STRIPE_SECRET_KEY", default=None)
+STRIPE_PUBLIC_KEY = config("STRIPE_PUBLIC_KEY", default=None)
+WEBHOOK_SECRET = config("WEBHOOK_SECRET", default=None)
