@@ -264,10 +264,31 @@ class OrderSerializer(serializers.ModelSerializer):
     """
     Serializer for displaying order details, including all order items.
     """
+    user = UserSerializer(read_only=True, help_text="The user who placed the order (read-only).")
     items = OrderItemSerializer(read_only=True, many=True, help_text="List of items in the order (read-only).") # N+1 potential: prefetch_related('items__product') in view
     class Meta:
         model = Order 
-        fields = ["id", "stripe_checkout_id", "amount", "items", "status", "created_at"]
+        fields = ["id", "user", "stripe_checkout_id", "amount", "currency", "payment_method", "status", "created_at", "customer_email", "items"]
+        read_only_fields = ["user", "amount", "currency", "customer_email", "status", "created_at"] # These fields will be set by the view logic
+
+class PlaceOrderSerializer(serializers.Serializer):
+    """
+    Serializer for placing a new order.
+    Requires cart_code and payment_method.
+    """
+    cart_code = serializers.CharField(max_length=11, help_text="Unique code of the cart to place the order from.")
+    payment_method = serializers.ChoiceField(
+        choices=Order.PAYMENT_CHOICES,
+        help_text="Payment method for the order ('COD' for Cash on Delivery, 'ONLINE' for Online Payment)."
+    )
+
+    def validate_cart_code(self, value):
+        """
+        Validates that the cart code exists.
+        """
+        if not Cart.objects.filter(cart_code=value).exists():
+            raise serializers.ValidationError({"detail": "Invalid cart code."})
+        return value
 
 
 class AddressCreateSerializer(serializers.Serializer):
@@ -466,10 +487,12 @@ class OrderItemSerializer(serializers.ModelSerializer):
 
 
 class OrderSerializer(serializers.ModelSerializer):
+    user = UserSerializer(read_only=True)
     items = OrderItemSerializer(read_only=True, many=True)
     class Meta:
         model = Order 
-        fields = ["id", "stripe_checkout_id", "amount", "items", "status", "created_at"]
+        fields = ["id", "user", "stripe_checkout_id", "amount", "currency", "payment_method", "status", "created_at", "customer_email", "items"]
+        read_only_fields = ["user", "amount", "currency", "customer_email", "status", "created_at"]
 
 
 class AddressCreateSerializer(serializers.Serializer):
