@@ -206,14 +206,41 @@ class Order(models.Model):
     Represents a customer's order, typically created after a successful payment.
     Stores payment details, amount, currency, customer email, and status.
     """
-    stripe_checkout_id = models.CharField(max_length=255, unique=True, db_index=True, help_text="Unique ID from Stripe Checkout Session.")
+    PAYMENT_CHOICES = [
+        ("COD", "Cash on Delivery"),
+        ("ONLINE", "Online Payment"),
+    ]
+
+    ORDER_STATUS_CHOICES = [
+        ("Pending Delivery", "Pending Delivery"),
+        ("Processing", "Processing"),
+        ("Paid", "Paid"),
+        ("Cancelled", "Cancelled"),
+    ]
+
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="orders",
+        null=True, # Make user nullable for existing orders
+        blank=True,
+        help_text="The user who placed this order."
+    )
+    stripe_checkout_id = models.CharField(max_length=255, unique=True, db_index=True, null=True, blank=True, help_text="Unique ID from Stripe Checkout Session (optional, for online payments).")
     amount = models.DecimalField(max_digits=10, decimal_places=2, help_text="Total amount of the order.")
     currency = models.CharField(max_length=10, help_text="Currency of the order (e.g., 'usd').")
     customer_email = models.EmailField(db_index=True, help_text="Email of the customer who placed the order.")
+    payment_method = models.CharField(
+        max_length=10,
+        choices=PAYMENT_CHOICES,
+        default="COD", # Provide a default for existing rows
+        help_text="Method of payment for the order."
+    )
     status = models.CharField(
-        max_length=20, 
-        choices=[("Pending", "Pending"), ("Paid", "Paid")],
-        help_text="Current status of the order (e.g., 'Paid')."
+        max_length=20,
+        choices=ORDER_STATUS_CHOICES,
+        default="Pending Delivery", # Default status for new orders
+        help_text="Current status of the order (e.g., 'Pending Delivery', 'Paid')."
     )
     created_at = models.DateTimeField(auto_now_add=True, help_text="Timestamp when the order was created.")
 
