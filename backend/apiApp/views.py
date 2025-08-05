@@ -122,7 +122,7 @@ class CategoryViewSet(viewsets.ModelViewSet):
 
 @swagger_auto_schema(
     method='post',
-    request_body=AddToCartSerializer(),
+    request_body=AddToCartSerializer(), # Revert to using the serializer directly
     responses={
         200: CartSerializer(),
         400: 'Bad Request',
@@ -130,7 +130,7 @@ class CategoryViewSet(viewsets.ModelViewSet):
     },
 )
 @api_view(["POST"])
-@permission_classes([IsAuthenticated])
+@permission_classes([AllowAny])
 @ratelimit(key='user', rate='5/s', block=True)
 def add_to_cart(request):
     """
@@ -146,49 +146,50 @@ def add_to_cart(request):
         logger.error(f"Add to cart validation error: {e.detail}")
         return Response({"detail": e.detail}, status=status.HTTP_400_BAD_REQUEST)
 
-    cart_code = serializer.validated_data["cart_code"]
+    cart_code = serializer.validated_data.get("cart_code") # Use .get() as it's now optional
     product_id = serializer.validated_data["product_id"]
     quantity = serializer.validated_data.get("quantity", 1)
 
-    try:
-        # Attempt to retrieve the cart and product
-        cart = get_object_or_404(Cart, cart_code=cart_code)
-        product = get_object_or_404(Product, id=product_id)
-    except Exception as e:
-        logger.error(f"Error retrieving cart ({cart_code}) or product ({product_id}): {e}")
-        return Response({"detail": "Cart or Product not found."}, status=status.HTTP_404_NOT_FOUND)
-
-    # Use a transaction to ensure atomicity for cart operations
+    cart = None
     with transaction.atomic():
-        # Logic to handle cart ownership and creation
-        if cart_code:
-            try:
-                cart = Cart.objects.get(cart_code=cart_code)
-                # If cart exists and is anonymous, assign it to the authenticated user
-                if request.user.is_authenticated and cart.user is None:
-                    cart.user = request.user
-                    cart.save()
-                    logger.info(f"Anonymous cart {cart_code} assigned to user {request.user.email}.")
-                # If cart exists and belongs to another user, deny access
-                elif request.user.is_authenticated and cart.user != request.user:
-                    logger.warning(f"User {request.user.email} attempted to access cart {cart_code} belonging to another user.")
-                    return Response({"detail": "This cart code belongs to another user."}, status=status.HTTP_403_FORBIDDEN)
-            except Cart.DoesNotExist:
-                # If cart_code doesn't exist, create a new one for the user (or anonymous)
-                cart = Cart.objects.create(user=request.user if request.user.is_authenticated else None, cart_code=cart_code)
-                logger.info(f"New cart {cart_code} created for user {request.user.email if request.user.is_authenticated else 'anonymous'}.")
-        else:
-            # If no cart_code is provided, try to get the user's existing cart or create a new one
-            if request.user.is_authenticated:
+        if request.user.is_authenticated:
+            if cart_code:
+                try:
+                    cart = Cart.objects.get(cart_code=cart_code)
+                    if cart.user is None: # Anonymous cart, assign to authenticated user
+                        cart.user = request.user
+                        cart.save()
+                        logger.info(f"Anonymous cart {cart_code} assigned to user {request.user.email}.")
+                    elif cart.user != request.user: # Cart belongs to another user
+                        logger.warning(f"User {request.user.email} attempted to access cart {cart_code} belonging to another user.")
+                        return Response({"detail": "This cart code belongs to another user."}, status=status.HTTP_403_FORBIDDEN)
+                except Cart.DoesNotExist:
+                    # Cart code provided but doesn't exist, create a new one for the user
+                    cart = Cart.objects.create(user=request.user, cart_code=cart_code)
+                    logger.info(f"New cart {cart_code} created for authenticated user {request.user.email}.")
+            else:
+                # No cart_code provided for authenticated user, get or create their personal cart
                 cart, created = Cart.objects.get_or_create(user=request.user, defaults={'cart_code': Cart.generate_unique_cart_code()})
                 if created:
                     logger.info(f"New cart {cart.cart_code} created for authenticated user {request.user.email}.")
                 else:
                     logger.info(f"Existing cart {cart.cart_code} retrieved for authenticated user {request.user.email}.")
+        else: # Anonymous user
+            if not cart_code:
+                # Automatically generate a cart_code and create a new cart for anonymous users
+                cart_code = Cart.generate_unique_cart_code()
+                cart = Cart.objects.create(user=None, cart_code=cart_code)
+                logger.info(f"New anonymous cart {cart_code} created automatically.")
             else:
-                # For anonymous users, a cart_code must be provided to identify the cart
-                logger.warning("Anonymous user attempted to add to cart without providing a cart_code.")
-                return Response({"detail": "cart_code is required for anonymous users."}, status=status.HTTP_400_BAD_REQUEST)
+                try:
+                    cart = Cart.objects.get(cart_code=cart_code)
+                    if cart.user is not None: # Anonymous user cannot use a cart belonging to an authenticated user
+                        logger.warning(f"Anonymous user attempted to access cart {cart_code} belonging to an authenticated user.")
+                        return Response({"detail": "This cart code belongs to an authenticated user."}, status=status.HTTP_403_FORBIDDEN)
+                except Cart.DoesNotExist:
+                    # Cart code provided but doesn't exist, create a new anonymous cart
+                    cart = Cart.objects.create(user=None, cart_code=cart_code)
+                    logger.info(f"New anonymous cart {cart_code} created with provided code.")
 
         # Check if product exists and has enough stock before adding to cart
         try:
