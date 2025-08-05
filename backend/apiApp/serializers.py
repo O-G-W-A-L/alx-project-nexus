@@ -191,20 +191,11 @@ class CartStatSerializer(serializers.ModelSerializer):
 class AddToCartSerializer(serializers.Serializer):
     """
     Serializer for adding a product to a cart.
-    Requires cart_code, product_id, and an optional quantity.
+    Requires product_id, and an optional quantity. cart_code is optional for authenticated users.
     """
-    cart_code = serializers.CharField(max_length=11, help_text="Unique code of the cart to add the product to.")
+    cart_code = serializers.CharField(max_length=11, required=False, allow_blank=True, help_text="Unique code of the cart to add the product to (optional for authenticated users).")
     product_id = serializers.IntegerField(help_text="ID of the product to add to the cart.")
     quantity = serializers.IntegerField(min_value=1, required=False, default=1, help_text="Quantity of the product to add (defaults to 1).")
-
-    def validate_cart_code(self, value):
-        """
-        Validates the provided cart code.
-        Note: This performs a database lookup. The view handles cart creation/lookup.
-        """
-        # For adding to cart, the cart code might be new for anonymous users, so we don't validate existence here.
-        # The view will handle creation or lookup.
-        return value
 
     def validate_product_id(self, value):
         """
@@ -427,14 +418,9 @@ class CartStatSerializer(serializers.ModelSerializer):
 
 # This serializer is used for creating a cart, it includes the cart code
 class AddToCartSerializer(serializers.Serializer):
-    cart_code = serializers.CharField(max_length=11)
+    cart_code = serializers.CharField(max_length=11, required=False, allow_blank=True)
     product_id = serializers.IntegerField()
     quantity = serializers.IntegerField(min_value=1, required=False, default=1)
-
-    def validate_cart_code(self, value):
-        if not Cart.objects.filter(cart_code=value).exists():
-            raise serializers.ValidationError("Invalid cart code.")
-        return value
 
     def validate_product_id(self, value):
         if not Product.objects.filter(id=value).exists():
