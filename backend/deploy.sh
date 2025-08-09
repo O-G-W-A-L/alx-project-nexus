@@ -34,6 +34,23 @@ warning() {
 # Main deployment function
 main() {
     log "🚀 Starting Django deployment to Render with Supabase..."
+
+    # Load environment variables from .env file
+    # Use dirname "$0" to get the directory of the script itself
+    local env_file="$(dirname "$0")/.env"
+    if [[ -f "$env_file" ]]; then
+        log "Loading environment variables from $env_file..."
+        while IFS='=' read -r key value; do
+            if [[ ! -z "$key" && ! "$key" =~ ^# ]]; then
+                # Remove leading/trailing whitespace and quotes from value
+                value=$(echo "$value" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' -e 's/^"//' -e 's/"$//' -e "s/^'//" -e "s/'$//")
+                export "$key=$value"
+            fi
+        done < "$env_file"
+        log "✅ Environment variables loaded from $env_file"
+    else
+        warning "$env_file not found, proceeding without it."
+    fi
     
     # Step 1: Environment validation
     validate_environment
@@ -91,11 +108,18 @@ validate_environment() {
 install_dependencies() {
     log "📦 Installing Python dependencies..."
     
-    if [[ -f "requirements.txt" ]]; then
-        pip install --no-cache-dir -r requirements.txt
-        success "Dependencies installed"
+    local requirements_file="$(dirname "$0")/requirements.txt"
+    local venv_pip="$(dirname "$0")/venv/bin/pip"
+
+    if [[ -f "$requirements_file" ]]; then
+        if [[ -f "$venv_pip" ]]; then
+            "$venv_pip" install --no-cache-dir -r "$requirements_file"
+            success "Dependencies installed"
+        else
+            error "Virtual environment pip not found at $venv_pip. Please ensure the virtual environment is set up correctly."
+        fi
     else
-        error "requirements.txt not found"
+        error "$requirements_file not found"
     fi
 }
 
@@ -105,7 +129,7 @@ setup_database() {
     
     # Test database connection
     log "Testing database connection and Django ORM..."
-    python manage.py shell -c "
+    python "$(dirname "$0")/manage.py" shell -c "
 from django.db import connection
 from django.apps import apps
 try:
@@ -122,9 +146,9 @@ except Exception as e:
     
     # Check for pending migrations
     log "Checking for pending migrations..."
-    if python manage.py showmigrations --plan | grep -q '\[ \]'; then
+    if python "$(dirname "$0")/manage.py" showmigrations --plan | grep -q '\[ \]'; then
         log "Found pending migrations, applying..."
-        python manage.py migrate --no-input --verbosity=2
+        python "$(dirname "$0")/manage.py" migrate --no-input --verbosity=2
         success "Migrations applied successfully"
     else
         log "No pending migrations found"
@@ -132,7 +156,7 @@ except Exception as e:
     
     # Verify tables exist
     log "Verifying database tables..."
-    python manage.py shell -c "
+    python "$(dirname "$0")/manage.py" shell -c "
 from django.db import connection
 with connection.cursor() as cursor:
     cursor.execute(\"SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = 'public'\")
@@ -147,7 +171,7 @@ with connection.cursor() as cursor:
 collect_static_files() {
     log "📁 Collecting static files..."
     
-    python manage.py collectstatic --no-input --clear
+    python "$(dirname "$0")/manage.py" collectstatic --no-input --clear
     success "Static files collected"
 }
 
@@ -157,11 +181,11 @@ run_health_checks() {
     
     # Django system check
     log "Running Django system checks..."
-    python manage.py check --deploy || warning "Some deployment checks failed (non-critical)"
+    python "$(dirname "$0")/manage.py" check --deploy || warning "Some deployment checks failed (non-critical)"
     
     # Database check
     log "Checking database tables..."
-    python manage.py shell -c "
+    python "$(dirname "$0")/manage.py" shell -c "
 from django.core.management import execute_from_command_line
 from django.db import connection
 from django.apps import apps
@@ -183,7 +207,7 @@ create_superuser_if_needed() {
     if [[ -n "${DJANGO_SUPERUSER_USERNAME:-}" && -n "${DJANGO_SUPERUSER_EMAIL:-}" && -n "${DJANGO_SUPERUSER_PASSWORD:-}" ]]; then
         log "👤 Creating superuser..."
         
-        python manage.py shell -c "
+        python "$(dirname "$0")/manage.py" shell -c "
 from django.contrib.auth import get_user_model
 User = get_user_model()
 username = '$DJANGO_SUPERUSER_USERNAME'
