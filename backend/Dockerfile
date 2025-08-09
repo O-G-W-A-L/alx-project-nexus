@@ -28,5 +28,5 @@ COPY . /app/backend/
 # Expose the port Gunicorn will run on
 EXPOSE 8000
 
-# Command to run the application (Gunicorn for production)
-CMD ["gunicorn", "ecommerce.wsgi:application", "--bind", "0.0.0.0:8000"]
+# Run migrations, collect static files, then start Gunicorn
+CMD /bin/sh -c "python manage.py migrate --no-input && python manage.py collectstatic --no-input --clear && gunicorn ecommerce.wsgi:application --bind 0.0.0.0:8000"
